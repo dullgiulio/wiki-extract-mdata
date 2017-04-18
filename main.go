@@ -5,9 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
-	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -45,8 +43,43 @@ func emitSubpages(r io.Reader, domain string, out chan<- string) error {
 
 type values map[string]interface{}
 
+type byteTo []byte
+
+func (b byteTo) WriteTo(w io.Writer) (int64, error) {
+	n, err := w.Write([]byte(b))
+	return int64(n), err
+}
+
+type imageTo struct {
+	img *mimed
+}
+
+func (i *imageTo) WriteTo(w io.Writer) (int64, error) {
+	n, err := w.Write([]byte("<img src=\""))
+	if err != nil {
+		return int64(n), err
+	}
+	m, err := i.img.WriteTo(w)
+	m += int64(n)
+	if err != nil {
+		return m, err
+	}
+	n, err = w.Write([]byte("\" />"))
+	return m + int64(n), err
+}
+
 type processor struct {
-	domain string
+	domain  string
+	imgproc *imgproc
+}
+
+func (p *processor) run(nworkers int, domains chan string, out chan []byte) {
+	wg := &sync.WaitGroup{}
+	wg.Add(nworkers)
+	for i := 0; i < nworkers; i++ {
+		go p.process(domains, out, wg)
+	}
+	wg.Wait()
 }
 
 func (p *processor) renderText(w io.Writer, node *html.Node) error {
@@ -58,27 +91,36 @@ func (p *processor) renderText(w io.Writer, node *html.Node) error {
 		_, err := w.Write([]byte(data))
 		return err
 	}
-	var writeAfter []byte
+	var after, before io.WriterTo
 	if node.Type == html.ElementNode {
-		var data []byte
 		switch node.Data {
 		case "li":
-			data = []byte("\t* ")
-			writeAfter = []byte("\n")
+			before = byteTo([]byte("\t* "))
+			after = byteTo([]byte("\n"))
 		case "br":
-			data = []byte("\n")
+			before = byteTo([]byte("\n"))
 		case "a":
 			href := nodeGetAttr(node, "href")
 			if href != "" {
-				data = []byte(" <a href=\"" + href + "\">")
-				writeAfter = []byte("</a>")
+				before = byteTo([]byte(" <a href=\"" + href + "\">"))
+				after = byteTo([]byte("</a>"))
 			}
-			// case "img": // TODO: download and emit embedded img tag
+		case "img":
+			src := nodeGetAttr(node, "src")
+			if src != "" {
+				img, err := p.imgproc.get(p.domain + src)
+				// Silently skip images we cannot get
+				if err != nil {
+					log.Printf("cannot include image %s: %s", p.domain+src, err)
+				} else {
+					before = &imageTo{img: img}
+				}
+			}
 		}
-		if data != nil {
-			if _, err := w.Write(data); err != nil {
-				return err
-			}
+	}
+	if before != nil {
+		if _, err := before.WriteTo(w); err != nil {
+			return err
 		}
 	}
 	for node = node.FirstChild; node != nil; node = node.NextSibling {
@@ -86,8 +128,8 @@ func (p *processor) renderText(w io.Writer, node *html.Node) error {
 			return err
 		}
 	}
-	if writeAfter != nil {
-		if _, err := w.Write(writeAfter); err != nil {
+	if after != nil {
+		if _, err := after.WriteTo(w); err != nil {
 			return err
 		}
 	}
@@ -186,22 +228,29 @@ func (p *processor) processPage(r io.Reader) ([]byte, error) {
 }
 
 func (p *processor) pageReader(url string) (io.Reader, error) {
-	resp, err := http.Get(url)
+	mimed, err := newMimedFromUrl(url)
 	if err != nil {
-		return nil, fmt.Errorf("cannot GET: %s", err)
+		return nil, err
 	}
-	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("cannot read body: %s", err)
-	}
-	return bytes.NewReader(body), nil
+	return bytes.NewReader(mimed.data), nil
+}
+
+func (p *processor) fileReader(url string) (io.Reader, error) {
+	return os.Open(url)
 }
 
 func (p *processor) process(in <-chan string, out chan<- []byte, wg *sync.WaitGroup) {
 	for url := range in {
 		log.Printf("debug: processing start: %s", url)
-		r, err := p.pageReader(url)
+		var (
+			r io.Reader
+			err error
+		)
+		if url[0:7] == "file://" {
+			r, err = p.fileReader(url[7:])
+		} else {
+			r, err = p.pageReader(url)
+		}
 		if err != nil {
 			log.Printf("%s: cannot read page content: %s", url, err)
 			continue
@@ -231,10 +280,11 @@ func main() {
 	nworkers := 6
 	filename := "OPI.html"
 	domain := "http://wiki.local"
+	maxLru := 256
 
 	domains := make(chan string, 2048)
+	out := make(chan []byte)
 	go func() {
-		// TODO: Could just use pageReader here, but lots of memory.
 		r, err := os.Open(filename)
 		if err != nil {
 			log.Fatal("cannot open file: ", err)
@@ -242,14 +292,15 @@ func main() {
 		if err := emitSubpages(r, domain, domains); err != nil {
 			log.Fatal("cannot get subpages: %s", err)
 		}
+		/*
+		domains <- "file://./subpage.html"
+		close(domains)
+		*/
 	}()
-	out := make(chan []byte)
-	wg := &sync.WaitGroup{}
-	wg.Add(nworkers)
-	p := &processor{domain}
-	for i := 0; i < nworkers; i++ {
-		go p.process(domains, out, wg)
+	processor := &processor{
+		domain:  domain,
+		imgproc: newImgproc(nworkers, maxLru),
 	}
 	go printer(out, os.Stdout)
-	wg.Wait()
+	processor.run(nworkers, domains, out)
 }
