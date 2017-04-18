@@ -112,6 +112,7 @@ func (p *processor) renderText(w io.Writer, node *html.Node) error {
 				// Silently skip images we cannot get
 				if err != nil {
 					log.Printf("cannot include image %s: %s", p.domain+src, err)
+					before = byteTo([]byte(" [image unavailable] "))
 				} else {
 					before = &imageTo{img: img}
 				}
