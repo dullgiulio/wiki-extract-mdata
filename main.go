@@ -268,7 +268,7 @@ func (p *processor) process(in <-chan string, out chan<- []byte, wg *sync.WaitGr
 		}
 		data, err := p.processPage(r)
 		if err != nil {
-			log.Fatal("cannot extract from supage: %s", err)
+			log.Fatalf("cannot extract from supage: %s", err)
 		}
 		log.Printf("debug: processing done: %s", url)
 		out <- data
@@ -279,10 +279,10 @@ func (p *processor) process(in <-chan string, out chan<- []byte, wg *sync.WaitGr
 func printer(in <-chan []byte, w io.Writer) {
 	for data := range in {
 		if _, err := w.Write(data); err != nil {
-			log.Fatal("cannot write to output: %s", err)
+			log.Fatalf("cannot write to output: %s", err)
 		}
 		if _, err := w.Write([]byte("\n")); err != nil {
-			log.Fatal("cannot write to output: %s", err)
+			log.Fatalf("cannot write to output: %s", err)
 		}
 	}
 }
@@ -298,10 +298,10 @@ func main() {
 	go func() {
 		r, err := os.Open(filename)
 		if err != nil {
-			log.Fatal("cannot open file: ", err)
+			log.Fatalf("cannot open file: %s", err)
 		}
 		if err := emitSubpages(r, domain, domains); err != nil {
-			log.Fatal("cannot get subpages: %s", err)
+			log.Fatalf("cannot get subpages: %s", err)
 		}
 		r.Close()
 		/*
