@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"os"
 	"strings"
@@ -237,14 +238,23 @@ func (p *processor) pageReader(url string) (io.Reader, error) {
 }
 
 func (p *processor) fileReader(url string) (io.Reader, error) {
-	return os.Open(url)
+	r, err := os.Open(url)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read file: %s", err)
+	}
+	defer r.Close()
+	data, err := ioutil.ReadAll(r)
+	if err != nil {
+		return nil, fmt.Errorf("cannot load file: %s", err)
+	}
+	return bytes.NewReader(data), nil
 }
 
 func (p *processor) process(in <-chan string, out chan<- []byte, wg *sync.WaitGroup) {
 	for url := range in {
 		log.Printf("debug: processing start: %s", url)
 		var (
-			r io.Reader
+			r   io.Reader
 			err error
 		)
 		if url[0:7] == "file://" {
@@ -293,9 +303,10 @@ func main() {
 		if err := emitSubpages(r, domain, domains); err != nil {
 			log.Fatal("cannot get subpages: %s", err)
 		}
+		r.Close()
 		/*
-		domains <- "file://./subpage.html"
-		close(domains)
+			domains <- "file://./subpage.html"
+			close(domains)
 		*/
 	}()
 	processor := &processor{
