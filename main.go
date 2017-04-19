@@ -19,7 +19,7 @@ import (
 func nodeGetAttr(node *html.Node, attr string) string {
 	for n := range node.Attr {
 		if node.Attr[n].Key == attr {
-			return node.Attr[n].Val
+			return strings.TrimSpace(node.Attr[n].Val)
 		}
 	}
 	return ""
@@ -104,7 +104,7 @@ func (p *processor) renderText(w io.Writer, node *html.Node) error {
 			href := nodeGetAttr(node, "href")
 			if href != "" {
 				before = byteTo([]byte(" <a href=\"" + href + "\">"))
-				after = byteTo([]byte("</a>"))
+				after = byteTo([]byte("</a> "))
 			}
 		case "img":
 			src := nodeGetAttr(node, "src")
@@ -118,6 +118,9 @@ func (p *processor) renderText(w io.Writer, node *html.Node) error {
 					before = &imageTo{img: img}
 				}
 			}
+		default:
+			before = byteTo([]byte(" "))
+			after = byteTo([]byte(" "))
 		}
 	}
 	if before != nil {
