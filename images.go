@@ -67,7 +67,7 @@ func newImgproc(nworkers, max int) *imgproc {
 	return i
 }
 
-func (i imgproc) get(url string) (*mimed, error) {
+func (i *imgproc) get(url string) (*mimed, error) {
 	var (
 		err error
 		m   *mimed
