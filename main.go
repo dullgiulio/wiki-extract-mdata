@@ -74,13 +74,14 @@ type processor struct {
 	imgproc *imgproc
 }
 
-func (p *processor) run(nworkers int, domains chan string, out chan []byte) {
+func (p *processor) run(nworkers int, domains <-chan string, out chan<- []byte) {
 	wg := &sync.WaitGroup{}
 	wg.Add(nworkers)
 	for i := 0; i < nworkers; i++ {
 		go p.process(domains, out, wg)
 	}
 	wg.Wait()
+	close(out)
 }
 
 func (p *processor) renderText(w io.Writer, node *html.Node) error {
@@ -119,7 +120,6 @@ func (p *processor) renderText(w io.Writer, node *html.Node) error {
 				}
 			}
 		default:
-			before = byteTo([]byte(" "))
 			after = byteTo([]byte(" "))
 		}
 	}
@@ -159,12 +159,12 @@ func (p *processor) metadata(doc *goquery.Document, vals map[string]interface{})
 			"url":  p.domain + href,
 		}
 	})
-	doc.Find(".page-metadata-modification-info .last-modified a").Each(func(i int, s *goquery.Selection) {
+	doc.Find(".page-metadata-modification-info .last-modified").Each(func(i int, s *goquery.Selection) {
 		node := s.Get(0)
 		dateText := node.FirstChild.Data
-		date, err := time.Parse("02 Jan 2006", dateText)
-		if err != nil {
-			err = fmt.Errorf("cannot parse modification date: %s", err)
+		date, e := time.Parse("02 Jan 2006", dateText)
+		if e != nil {
+			err = fmt.Errorf("cannot parse modification date: %s", e)
 			return
 		}
 		vals["_date"] = date.Format(time.RFC3339)
@@ -279,7 +279,7 @@ func (p *processor) process(in <-chan string, out chan<- []byte, wg *sync.WaitGr
 	wg.Done()
 }
 
-func printer(in <-chan []byte, w io.Writer) {
+func printer(in <-chan []byte, w io.Writer, done chan<- struct{}) {
 	for data := range in {
 		if _, err := w.Write(data); err != nil {
 			log.Fatalf("cannot write to output: %s", err)
@@ -288,6 +288,7 @@ func printer(in <-chan []byte, w io.Writer) {
 			log.Fatalf("cannot write to output: %s", err)
 		}
 	}
+	done <- struct{}{}
 }
 
 func main() {
@@ -298,6 +299,7 @@ func main() {
 
 	domains := make(chan string, 2048)
 	out := make(chan []byte)
+	done := make(chan struct{})
 	go func() {
 		r, err := os.Open(filename)
 		if err != nil {
@@ -316,6 +318,7 @@ func main() {
 		domain:  domain,
 		imgproc: newImgproc(nworkers, maxLru),
 	}
-	go printer(out, os.Stdout)
+	go printer(out, os.Stdout, done)
 	processor.run(nworkers, domains, out)
+	<-done
 }
