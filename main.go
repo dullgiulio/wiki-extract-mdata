@@ -288,7 +288,7 @@ func printer(in <-chan []byte, w io.Writer, done chan<- struct{}) {
 			log.Fatalf("cannot write to output: %s", err)
 		}
 	}
-	done <- struct{}{}
+	close(done)
 }
 
 func main() {
